@@ -3,6 +3,8 @@
 export interface PortalConfig {
   ctl: string;
   demoMode: boolean;
+  /** Demo auto-approver bound and active (demo mode only). */
+  demoApprover: boolean;
   title: string;
 }
 
@@ -12,7 +14,8 @@ export async function fetchConfig(): Promise<PortalConfig> {
   const body: unknown = await res.json();
   if (body && typeof body === 'object' && 'ctl' in body && 'demoMode' in body) {
     const title = 'title' in body && typeof body.title === 'string' && body.title ? body.title : 'Data Access Portal';
-    return { ctl: String(body.ctl), demoMode: body.demoMode === true, title };
+    const demoApprover = 'demoApprover' in body && body.demoApprover === true;
+    return { ctl: String(body.ctl), demoMode: body.demoMode === true, demoApprover, title };
   }
   throw new Error('Unexpected config payload');
 }
@@ -72,3 +75,37 @@ export const toneClass: Record<Tone, string> = {
   destructive: 'border-destructive text-destructive',
   muted: 'border-border text-muted-foreground',
 };
+
+export interface DemoApproverState {
+  enabled: boolean;
+  pct: number;
+  identity: string | null;
+  canEdit: boolean;
+  delayMs: number;
+  updatedBy: string;
+  updatedAt: string;
+  lastDecision: { requestId: string; outcome: string; at: string } | null;
+  lastError: string | null;
+}
+
+export async function fetchDemoApprover(): Promise<DemoApproverState> {
+  const res = await fetch('/api/portal/demo/approver');
+  const body: unknown = await res.json().catch(() => ({}));
+  if (!res.ok || !body || typeof body !== 'object') throw new Error(`Demo approver status failed (${res.status})`);
+  const b = body as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === 'string' ? v : '');
+  return {
+    enabled: b.enabled === true,
+    pct: typeof b.pct === 'number' ? b.pct : 100,
+    identity: typeof b.identity === 'string' ? b.identity : null,
+    canEdit: b.canEdit === true,
+    delayMs: typeof b.delayMs === 'number' ? b.delayMs : 3000,
+    updatedBy: text(b.updatedBy),
+    updatedAt: text(b.updatedAt),
+    lastDecision:
+      b.lastDecision && typeof b.lastDecision === 'object'
+        ? (b.lastDecision as DemoApproverState['lastDecision'])
+        : null,
+    lastError: typeof b.lastError === 'string' ? b.lastError : null,
+  };
+}

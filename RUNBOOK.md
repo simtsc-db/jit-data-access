@@ -26,8 +26,45 @@ You need **two human identities**, because the requester can never approve their
 Use two browser profiles (or one normal and one private window) so both sessions stay signed in side by side.
 The requester's screen is the one you share most.
 
-> A one-presenter variant (a demo auto-approver) is not built yet. Until then, the fallback for a solo run is
-> the scripted test in [section 6](#6-fallback-scripted-run).
+> Presenting alone? Use the `demo` target with the demo auto-approver instead of a second human; see
+> [Solo presenter](#solo-presenter-demo-auto-approver).
+
+## Solo presenter: demo auto-approver
+
+The `demo` bundle target adds a **separate service principal** that decides each new request about 3 seconds
+after it is submitted. You set its approval rate with a slider in the **Review queue** tab: **100%** always
+approves, **0%** always declines, anything in between approves at random at that rate. It is checked like any
+approver (owner group membership, no self-approval), and the record is marked `DEMO_AUTO` with the draw and
+rate in the decision reason. Never deploy the `demo` target to production.
+
+One-time setup (names are the defaults; adjust if you override the `demo_approver_*` variables):
+
+```bash
+# 1. Approver service principal with SQL access, and the owner group holding you + the approver
+databricks service-principals create --json '{"displayName":"jit-demo-approver","entitlements":[{"value":"databricks-sql-access"}]}' -p <profile>
+databricks groups create --json '{"displayName":"jit-access-owners","members":[{"value":"<your-user-id>"},{"value":"<approver-sp-id>"}]}' -p <profile>
+databricks permissions update warehouses <warehouse-id> --json '{"access_control_list":[{"service_principal_name":"<approver-app-id>","permission_level":"CAN_USE"}]}' -p <profile>
+
+# 2. Its credentials in a secret scope (the secret goes straight from the API into the scope, never to disk)
+databricks secrets create-scope jit-access-demo -p <profile>
+printf '%s' '<approver-app-id>' | databricks secrets put-secret jit-access-demo client-id -p <profile>
+databricks service-principal-secrets-proxy create <approver-sp-id> -p <profile> -o json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"], end="")' \
+  | databricks secrets put-secret jit-access-demo client-secret -p <profile>
+
+# 3. Deploy with -t demo (owner group becomes jit-access-owners)
+databricks bundle deploy -t demo -p <profile>
+databricks bundle run tba_setup -t demo -p <profile>
+databricks bundle run access_portal -t demo -p <profile>
+```
+
+Do not put the approver in `admins`: that would make it a workspace admin. The dedicated owner group avoids that.
+
+Solo flow: set the slider to **100%** before you start. In Beat 3 you are the requester; skip Beat 4 (the
+approver acts for you) and point at the Review queue card, which shows the last decision. To show a
+decline, set the slider to **0%** and submit again (after the first window ends). For Beat 6 (self-approval),
+the approver decides too fast to click Approve on your own request first; instead show the rule in the table
+definition: `SHOW TBLPROPERTIES <catalog>.control.access_lifecycle` lists `delta.constraints.no_self_approval`.
 
 ## 1. Day before: deploy and verify
 

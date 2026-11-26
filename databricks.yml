@@ -67,11 +67,49 @@ variables:
   request_timeout_days:
     description: Days after which a PENDING request is closed as TIMED_OUT
     default: "7"
+  demo_approver_scope:
+    description: >
+      Secret scope holding the demo auto-approver service principal's OAuth credentials.
+      Used only by the `demo` target (see RUNBOOK.md, "Solo presenter").
+    default: jit-access-demo
+  demo_approver_client_id_key:
+    description: Secret key (in demo_approver_scope) holding the approver SP's application (client) ID
+    default: client-id
+  demo_approver_secret_key:
+    description: Secret key (in demo_approver_scope) holding the approver SP's OAuth secret
+    default: client-secret
 
 targets:
   dev:
     mode: development
     default: true
+  # Same as dev, plus the demo auto-approver: a separate service principal that decides new requests at a
+  # rate set with a slider in the portal, so one presenter can run the whole flow. Its credentials come from
+  # a secret scope through app resources; nothing is stored in this repo. Never use in production.
+  demo:
+    mode: development
+    variables:
+      owner_group: jit-access-owners
+    resources:
+      apps:
+        access_portal:
+          resources:
+            - name: demo-approver-client-id
+              secret:
+                scope: ${var.demo_approver_scope}
+                key: ${var.demo_approver_client_id_key}
+                permission: READ
+            - name: demo-approver-secret
+              secret:
+                scope: ${var.demo_approver_scope}
+                key: ${var.demo_approver_secret_key}
+                permission: READ
+          config:
+            env:
+              - name: TBA_DEMO_APPROVER_CLIENT_ID
+                value_from: demo-approver-client-id
+              - name: TBA_DEMO_APPROVER_SECRET
+                value_from: demo-approver-secret
   prod:
     mode: production
     # Production: deploy from CI as the platform service principal, e.g.

@@ -49,6 +49,8 @@ declare module "@databricks/appkit-ui/react" {
           expires_at: string;
           /** @sqlType STRING */
           decision_reason: string;
+          /** HUMAN (portal user) or DEMO_AUTO (demo auto-approver) */
+          decision_source: string;
           /** @sqlType INT */
           seconds_left: number;
         }>;
@@ -88,6 +90,8 @@ declare module "@databricks/appkit-ui/react" {
           closed_by: string;
           /** @sqlType STRING */
           decision_reason: string;
+          /** HUMAN (portal user) or DEMO_AUTO (demo auto-approver) */
+          decision_source: string;
           /** @sqlType BOOLEAN */
           expires_within_7d: boolean;
           /** @sqlType TIMESTAMP */

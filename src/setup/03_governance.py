@@ -8,7 +8,7 @@
 # MAGIC | Catalogue | `data_products` (owner group, tier, max duration) |
 # MAGIC | Guard | `tba_has_active_access(product)` UDF + ABAC ROW FILTER policy on tagged tables |
 # MAGIC | Grant | group-level `SELECT` on the data schema to the eligible group (group-only grant policy) |
-# MAGIC | Bypass prevention | ABAC DENY `MANAGE ACCESS CONTROL` (Beta) on the data schema |
+# MAGIC | Bypass prevention | ABAC DENY `MANAGE ACCESS CONTROL` on the data schema (optional) |
 # MAGIC
 # MAGIC Idempotent: safe to rerun.
 
@@ -294,7 +294,7 @@ def grants():
 step("group-level grants + app SP grants", grants)
 
 # COMMAND ----------
-# MAGIC %md ## 6. DENY MANAGE ACCESS CONTROL (Beta)
+# MAGIC %md ## 6. DENY MANAGE ACCESS CONTROL (optional)
 # MAGIC Stops anyone (including table owners) from granting around the workflow on the data
 # MAGIC schema. Exempt: the deployer (platform admin). Metastore admins are always exempt.
 
@@ -323,10 +323,10 @@ def deny_policy():
 
 try:
     deny_policy()
-    results.append(("ABAC DENY policy (Beta)", "OK"))
+    results.append(("ABAC DENY policy", "OK"))
 except Exception as e:
-    # Beta feature: absence must not break setup. Recorded as a known limitation.
-    results.append(("ABAC DENY policy (Beta)", f"SKIPPED (optional): {str(e)[:200]}"))
+    # Optional: DENY policies may not be enabled on every metastore; setup must still succeed without them.
+    results.append(("ABAC DENY policy", f"SKIPPED (optional): {str(e)[:200]}"))
 
 # COMMAND ----------
 

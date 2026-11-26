@@ -5,7 +5,7 @@ resources:
       description: >
         Idempotent setup: synthetic sensitive data product, Lakebase approval store (tables, constraints,
         history trigger, app grants), governed tag, ABAC time-bound guard (row filter policy),
-        group-level grants, DENY policy (Beta).
+        group-level grants, optional DENY policy.
       max_concurrent_runs: 1
       parameters:
         - name: catalog

@@ -32,6 +32,10 @@ Query latency with the guard: 0.7 to 1.1 s on a warm warehouse for this table.
 
 ## Not tested
 
+> Resolved later: [`lakebase-identity-probe.md`](lakebase-identity-probe.md) shows the guard runs with the
+> owner's rights, so end users need no access to the Lakebase catalog.
+
+
 - A second identity that has **no** `SELECT` on the Lakebase catalog. Creating a
   temporary secret for the test service principal was not authorised in this run, so
   whether the guard executes with the policy owner's rights on the Lakebase catalog

@@ -13,6 +13,7 @@ Names below are the bundle defaults. If you overrode variables, substitute your 
 | `<app>` | `jit-access-portal` |
 | `<expiry-job>` | `[dev <user>] jit-access-expiry` (dev target) |
 | `<owner_group>` | `admins` |
+| `<store_catalog>` | `jit_access_store` (Lakebase approval store, registered in Unity Catalog) |
 
 ## Cast
 
@@ -63,8 +64,8 @@ Do not put the approver in `admins`: that would make it a workspace admin. The d
 Solo flow: set the slider to **100%** before you start. In Beat 3 you are the requester; skip Beat 4 (the
 approver acts for you) and point at the Review queue card, which shows the last decision. To show a
 decline, set the slider to **0%** and submit again (after the first window ends). For Beat 6 (self-approval),
-the approver decides too fast to click Approve on your own request first; instead show the rule in the table
-definition: `SHOW TBLPROPERTIES <catalog>.control.access_lifecycle` lists `delta.constraints.no_self_approval`.
+the approver decides too fast to click Approve on your own request first; instead explain the two layers: the
+portal rule, and the `no_self_approval` CHECK constraint on `access_lifecycle` in the Lakebase approval store.
 
 ## 1. Day before: deploy and verify
 
@@ -87,6 +88,7 @@ scope; get that out of the way now, not on stage.
 |---|---|---|
 | App is up | Open the app URL as both users | Header shows each user's identity badge |
 | Warehouse is warm | Run `SELECT 1` in the SQL editor | Returns in about 1 s (a cold start takes longer) |
+| Approval store is awake | `SELECT count(*) FROM <store_catalog>.jit_control.demo_settings` (as the deployer) | Returns quickly; the first call after scale-to-zero is slower |
 | Requester sees nothing | Requester, SQL editor: `SELECT count(*) FROM <table>` | `0` |
 | No leftover open requests | Approver, **Review queue** tab | "Nothing to review" (or decline leftovers, reason "demo reset") |
 | Requester has no open window | Requester, **My access** tab | No PENDING or ACTIVE rows |
@@ -156,12 +158,13 @@ rehearsals (3 minutes) so it is gone by showtime.
 2. Optional, in the SQL editor:
 
 ```sql
-SELECT _change_type, status, approver_1, closed_by, _commit_timestamp
-FROM table_changes('<catalog>.control.access_lifecycle', 0)
-WHERE _change_type IN ('insert', 'update_postimage')
-ORDER BY _commit_timestamp DESC
+SELECT changed_at, change_type, principal, status, approver_1, decision_source, db_role
+FROM <catalog>.control.v_owner_access_history
+ORDER BY history_id DESC
 LIMIT 20;
 ```
+
+   The history is written by a trigger in the Lakebase approval store; the app cannot edit it.
 
 3. Optional: run the expiry job (Jobs -> `<expiry-job>` -> Run now) and show the record move to **EXPIRED**.
 
@@ -171,7 +174,8 @@ LIMIT 20;
 
 - The guard: `DESCRIBE FUNCTION EXTENDED <catalog>.control.tba_has_active_access;`
 - Why users cannot forge approvals: they have only `USE SCHEMA` on `control` and SELECT on caller-filtered
-  views; only the app service principal can modify `access_lifecycle`.
+  views; the approval store lives in Lakebase, where only the app's Postgres role can write (no DELETE), and every
+  change is logged by a trigger.
 - Why owners cannot grant around the flow: the optional DENY policy on `MANAGE ACCESS CONTROL` (Beta).
 - Limits to state honestly: row-level gating (0 rows, not an error), data copied during a window outlives it,
   tables only. See README "Known limitations".

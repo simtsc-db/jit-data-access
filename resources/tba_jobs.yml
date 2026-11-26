@@ -3,8 +3,9 @@ resources:
     tba_setup:
       name: ${var.name_prefix}-setup
       description: >
-        Idempotent setup: synthetic sensitive data product, control tables, governed tag,
-        ABAC time-bound guard (row filter policy), group-level grants, DENY policy (Beta).
+        Idempotent setup: synthetic sensitive data product, Lakebase approval store (tables, constraints,
+        history trigger, app grants), governed tag, ABAC time-bound guard (row filter policy),
+        group-level grants, DENY policy (Beta).
       max_concurrent_runs: 1
       parameters:
         - name: catalog
@@ -31,21 +32,36 @@ resources:
           default: ${var.synthetic_seed}
         - name: rows
           default: ${var.synthetic_rows}
+        - name: lakebase_project
+          default: ${resources.postgres_projects.approval_store.project_id}
+        - name: lakebase_catalog
+          default: ${resources.postgres_catalogs.approval_store_catalog.catalog_id}
+        - name: lakebase_schema
+          default: ${var.lakebase_schema}
       tasks:
         - task_key: generate_data
           notebook_task:
             notebook_path: ../src/setup/01_generate_data.py
           environment_key: default
-        - task_key: governance
+        - task_key: approval_store
           depends_on:
             - task_key: generate_data
           notebook_task:
-            notebook_path: ../src/setup/02_governance.py
+            notebook_path: ../src/setup/02_approval_store.py
+          environment_key: default
+        - task_key: governance
+          depends_on:
+            - task_key: approval_store
+          notebook_task:
+            notebook_path: ../src/setup/03_governance.py
           environment_key: default
       environments:
         - environment_key: default
           spec:
             environment_version: "4"
+            dependencies:
+              - databricks-sdk>=0.81
+              - psycopg[binary]>=3.2
 
     tba_expiry:
       name: ${var.name_prefix}-expiry
@@ -63,6 +79,10 @@ resources:
           default: ${var.control_schema}
         - name: request_timeout_days
           default: ${var.request_timeout_days}
+        - name: lakebase_project
+          default: ${resources.postgres_projects.approval_store.project_id}
+        - name: lakebase_schema
+          default: ${var.lakebase_schema}
       tasks:
         - task_key: expire_access
           notebook_task:
@@ -72,3 +92,6 @@ resources:
         - environment_key: default
           spec:
             environment_version: "4"
+            dependencies:
+              - databricks-sdk>=0.81
+              - psycopg[binary]>=3.2

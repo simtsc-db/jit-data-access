@@ -13,6 +13,12 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+        # Approval store (Lakebase). AppKit's lakebase plugin reads LAKEBASE_ENDPOINT and the PG* settings.
+        - name: postgres
+          postgres:
+            branch: projects/${resources.postgres_projects.approval_store.project_id}/branches/production
+            database: projects/${resources.postgres_projects.approval_store.project_id}/branches/production/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE
       config:
         command: ["npm", "run", "start"]
         env:
@@ -28,3 +34,7 @@ resources:
             value: ${var.demo_mode}
           - name: TBA_PORTAL_TITLE
             value: ${var.portal_title}
+          - name: LAKEBASE_ENDPOINT
+            value_from: postgres
+          - name: TBA_STORE_SCHEMA
+            value: ${var.lakebase_schema}

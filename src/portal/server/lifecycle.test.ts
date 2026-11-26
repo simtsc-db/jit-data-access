@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AccessError, approve, requestAccess, type RunSql } from './lifecycle';
+import { AccessError, approve, requestAccess, toPositional, type RunSql, type Stores } from './lifecycle';
 
 const product = {
   product_id: 'citizen_cases',
@@ -21,9 +21,10 @@ function fakeSql(opts: { request?: Record<string, unknown>; twoPerson?: boolean;
       return Promise.resolve(opts.request ? [opts.request] : []);
     }
     writes.push(statement.trim().split(/\s+/)[0]);
-    return Promise.resolve([{ num_affected_rows: 1 }]);
+    return Promise.resolve([{ request_id: 'r1' }]); // RETURNING request_id
   };
-  return { run, writes };
+  const db: Stores = { uc: run, store: run };
+  return { run: db, writes };
 }
 
 const pending = {
@@ -103,6 +104,22 @@ describe('approve', () => {
     );
     await expect(approve(second.run, { requestId: 'r1', approver: 'carol', approverIsOwner: true })).resolves.toBe(
       'ACTIVE'
+    );
+  });
+});
+
+describe('toPositional', () => {
+  it('maps named parameters to $n, reusing the index for repeated names', () => {
+    const { text, values } = toPositional("SELECT :a, :b, :a::text, nullif(:b, '')", {
+      a: { __sql_type: 'STRING', value: 'x' },
+      b: 'y',
+    });
+    expect(text).toBe("SELECT $1, $2, $1::text, nullif($2, '')");
+    expect(values).toEqual(['x', 'y']);
+  });
+  it('leaves casts and unknown names alone', () => {
+    expect(toPositional("SELECT now()::date, ':x' AS s, :missing", {}).text).toBe(
+      "SELECT now()::date, ':x' AS s, :missing"
     );
   });
 });

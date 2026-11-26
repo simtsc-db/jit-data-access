@@ -67,6 +67,26 @@ variables:
   request_timeout_days:
     description: Days after which a PENDING request is closed as TIMED_OUT
     default: "7"
+  lakebase_project:
+    description: Lakebase project ID for the approval store (lowercase letters, digits, hyphens)
+    default: jit-access
+  lakebase_catalog:
+    description: Unity Catalog name under which the Lakebase approval store is registered (read-only)
+    default: jit_access_store
+  lakebase_schema:
+    description: Postgres schema for the approval tables
+    default: jit_control
+  lakebase_min_cu:
+    description: Minimum compute units of the Lakebase endpoint
+    default: 0.5
+  lakebase_max_cu:
+    description: Maximum compute units of the Lakebase endpoint
+    default: 1
+  lakebase_suspend_timeout:
+    description: >
+      Idle time before the Lakebase compute scales to zero. Gated queries wake it, but a cold start
+      adds latency to the first query; keep it long for live demos.
+    default: 3600s
   demo_approver_scope:
     description: >
       Secret scope holding the demo auto-approver service principal's OAuth credentials.

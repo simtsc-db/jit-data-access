@@ -96,6 +96,8 @@ databricks bundle deploy -p <profile> --var catalog=my_jit_catalog --var owner_g
 
 ## Demo script (about 5 min)
 
+Full presenter runbook (cast, pre-flight, talk track, reset, troubleshooting): [`RUNBOOK.md`](RUNBOOK.md).
+
 1. As a user with no window, query `citizen_cases`: **0 rows**. Open the portal link (from the table comment or the
    UC *Request access* redirect, which appears for principals outside the eligible group) with the product preselected.
 2. Request 10 minutes (demo mode) with a justification. Show that the requester cannot approve their own request.

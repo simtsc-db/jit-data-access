@@ -109,6 +109,23 @@ databricks bundle deploy -p <profile> --var catalog=my_jit_catalog --var owner_g
   checks of the UC layer. The scenario test redacts identities and URLs in this file by default.
 - `src/portal/server/lifecycle.test.ts`: 7/7 unit tests of the rules, including a full two-person approval.
 - [`evidence/setup.md`](evidence/setup.md): policies, grants, constraints, RFA destination, expiry runs, app status.
+- [`evidence/lakebase-rowfilter-test.md`](evidence/lakebase-rowfilter-test.md): can the guard read approvals
+  stored in Lakebase Postgres? (see below)
+
+## Option: approval records in Lakebase
+
+The approval record can live in **Lakebase Postgres** instead of a Delta table, with no sync step. Register the
+Lakebase database in Unity Catalog (read-only Lakebase catalog) and let the guard UDF query it directly.
+Tested on serverless SQL ([evidence](evidence/lakebase-rowfilter-test.md)):
+
+- A UC SQL UDF can read the Lakebase catalog, and works as both a table row filter and an ABAC policy.
+- A change in Postgres (expire, extend) takes effect on the very next query: no sync lag.
+- If Lakebase is unreachable, the protected query **fails** (`FAILED_JDBC.CONNECTION`), so it fails closed.
+
+Trade-offs: reads of gated tables now depend on Lakebase availability; registered Lakebase catalogs require
+serverless compute (classic clusters fail closed); Postgres roles, not UC grants, control who can write
+approvals, so lock them down; and whether end users need SELECT on the Lakebase catalog (definer vs invoker
+rights) is not yet tested. The Delta table remains the default here.
 
 ## Known limitations and deviations
 

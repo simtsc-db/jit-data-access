@@ -154,6 +154,8 @@ Postgres fits that, and registering it in Unity Catalog lets the guard read it *
   closed). After scale-to-zero, the first gated query pays a cold start; `lakebase_suspend_timeout` controls it.
 - **Jobs write to Postgres as their run-as identity.** In dev that is the deployer (project owner). For production,
   run the jobs as a platform service principal and give it a Postgres role with DML on the approval tables.
+- **No Lakebase?** The Delta-based version (approval record in a Delta table with CDF, no Lakebase dependency)
+  is kept as git tag [`v1-delta`](../../tree/v1-delta).
 - **Upgrading from the Delta-based version** (before this change): the old `control.access_lifecycle` and
   `control.demo_settings` Delta tables are no longer used and are not migrated. Drop them once you no longer need
   their history.

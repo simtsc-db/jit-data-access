@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Tabs, TabsContent, TabsList, TabsTrigger, useAnalyticsQuery } from '@databricks/appkit-ui/react';
 import { ShieldCheck } from 'lucide-react';
-import { fetchConfig, type PortalConfig } from './lib/portal';
+import { fetchConfig, setDisplayTimeZone, type PortalConfig } from './lib/portal';
 import { ErrorNote, LoadingRows } from './portal/common';
 import { RequestTab } from './portal/RequestTab';
 import { MyAccessTab } from './portal/MyAccessTab';
@@ -37,7 +37,10 @@ export default function App() {
 
   useEffect(() => {
     fetchConfig()
-      .then(setConfig)
+      .then((c) => {
+        setDisplayTimeZone(c.timeZone);
+        setConfig(c);
+      })
       .catch((e: unknown) => setConfigError(e instanceof Error ? e.message : String(e)));
   }, []);
 

@@ -14,6 +14,11 @@ variables:
   portal_title:
     description: Title shown in the portal header and browser tab
     default: Data Access Portal
+  display_timezone:
+    description: >
+      IANA time zone for timestamps in the portal, e.g. Asia/Singapore or Europe/Berlin.
+      Empty shows each viewer's browser time zone.
+    default: ""
   catalog:
     description: Catalog that holds the control and data schemas. Use a dedicated catalog (see README).
     default: jit_access

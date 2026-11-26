@@ -9,7 +9,7 @@ import {
   useAnalyticsQuery,
 } from '@databricks/appkit-ui/react';
 import { sql } from '@databricks/appkit-ui/js';
-import { formatTs, isTrue } from '../lib/portal';
+import { formatCell, formatTs, isTrue } from '../lib/portal';
 import { EmptyNote, ErrorNote, LoadingRows } from './common';
 
 export function AuditTab({ ctl }: { ctl: string }) {
@@ -61,7 +61,7 @@ export function AuditTab({ ctl }: { ctl: string }) {
         <CardHeader>
           <CardTitle>Access review</CardTitle>
           <CardDescription>
-            Every request for products you own, from control.access_lifecycle (change data feed on). Source of truth for
+            Every request for products you own, from the approval store (full change history kept). Source of truth for
             periodic access reviews.
           </CardDescription>
         </CardHeader>
@@ -80,14 +80,14 @@ export function AuditTab({ ctl }: { ctl: string }) {
   );
 }
 
-/** Audit rows: show NULL as "--" (never as 0) and drop helper columns used only for the KPIs. */
+/** Audit rows: NULL as "--" (never 0), timestamps in local time, helper columns used only for the KPIs dropped. */
 const HELPER_COLUMNS = new Set(['expires_within_7d', 'as_of']);
 function forDisplay(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   return rows.map((row) =>
     Object.fromEntries(
       Object.entries(row)
         .filter(([key]) => !HELPER_COLUMNS.has(key))
-        .map(([key, value]) => [key, value ?? '--'])
+        .map(([key, value]) => [key, value == null ? '--' : formatCell(value)])
     )
   );
 }

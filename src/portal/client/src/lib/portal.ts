@@ -5,6 +5,8 @@ export interface PortalConfig {
   demoMode: boolean;
   /** Demo auto-approver bound and active (demo mode only). */
   demoApprover: boolean;
+  /** IANA time zone for display; empty means the viewer's browser zone. */
+  timeZone: string;
   title: string;
 }
 
@@ -15,7 +17,8 @@ export async function fetchConfig(): Promise<PortalConfig> {
   if (body && typeof body === 'object' && 'ctl' in body && 'demoMode' in body) {
     const title = 'title' in body && typeof body.title === 'string' && body.title ? body.title : 'Data Access Portal';
     const demoApprover = 'demoApprover' in body && body.demoApprover === true;
-    return { ctl: String(body.ctl), demoMode: body.demoMode === true, demoApprover, title };
+    const timeZone = 'timeZone' in body && typeof body.timeZone === 'string' ? body.timeZone : '';
+    return { ctl: String(body.ctl), demoMode: body.demoMode === true, demoApprover, timeZone, title };
   }
   throw new Error('Unexpected config payload');
 }
@@ -53,10 +56,28 @@ export function formatRemaining(seconds: number): string {
   return `${(s / 86400).toFixed(1)} days left`;
 }
 
+/** Time zone for all timestamps: the configured one (IANA name), else the viewer's browser zone. */
+let displayTimeZone: string | undefined;
+export function setDisplayTimeZone(tz: string | null | undefined) {
+  displayTimeZone = tz?.trim() ? tz.trim() : undefined;
+}
+
+/** Local date-time with zone label, e.g. "26 Nov 2026, 15:30:12 SGT". Non-timestamps are returned unchanged. */
 export function formatTs(value: string | null | undefined): string {
   if (!value) return '--';
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+    timeZone: displayTimeZone,
+  }).format(d);
+}
+
+const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+/** Formats a table cell if it is an ISO timestamp (e.g. "2026-11-26T07:30:55Z"). */
+export function formatCell(value: unknown): unknown {
+  return typeof value === 'string' && ISO_TS.test(value) ? formatTs(value) : value;
 }
 
 export type Tone = 'success' | 'warning' | 'destructive' | 'muted';

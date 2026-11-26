@@ -1,0 +1,82 @@
+bundle:
+  name: jit-data-access
+
+include:
+  - resources/*.yml
+
+# Everything workspace-specific is a variable. Override per run with --var name=value,
+# or via environment variables named BUNDLE_VAR_<name> (e.g. BUNDLE_VAR_catalog_storage_root).
+# The workspace itself comes from your CLI profile (-p <profile>); no host is stored here.
+variables:
+  name_prefix:
+    description: Prefix for the app and job names (lowercase letters, digits and hyphens)
+    default: jit-access
+  portal_title:
+    description: Title shown in the portal header and browser tab
+    default: Data Access Portal
+  catalog:
+    description: Catalog that holds the control and data schemas. Use a dedicated catalog (see README).
+    default: jit_access
+  catalog_storage_root:
+    description: >
+      Managed location for the catalog, e.g. s3://<bucket>/<path> or abfss://<container>@<account>.dfs.core.windows.net/<path>.
+      Leave empty to use the metastore default storage.
+    default: ""
+  control_schema:
+    description: Schema for the access-control plane (lifecycle table, guard UDF, views)
+    default: control
+  data_schema:
+    description: Schema for the time-bound data products (sensitive tables)
+    default: gated_data
+  warehouse_id:
+    description: Serverless SQL warehouse used by the app (defaults to the workspace's starter warehouse)
+    lookup:
+      warehouse: Serverless Starter Warehouse
+  eligible_group:
+    description: >
+      Group that holds the standing (group-level) SELECT grant on the data schema.
+      Data stays invisible to members until an approved, unexpired lifecycle record exists.
+    default: account users
+  standing_access_group:
+    description: Group exempt from the time-bound guard (e.g. data stewards). Need not exist.
+    default: jit_standing_access
+  owner_group:
+    description: Group whose members may approve requests for the demo data product
+    default: admins
+  product_tag_key:
+    description: Governed tag key that marks a table as a time-bound data product
+    default: jit_access_product
+  product_tag_value:
+    description: Tag value for the demo data product
+    default: citizen_cases
+  demo_mode:
+    description: When true, the portal also offers minute-level durations for live demos
+    default: "true"
+  synthetic_rows:
+    description: Number of synthetic rows generated for the demo data product
+    default: "5000"
+  synthetic_seed:
+    description: Random seed for the synthetic data
+    default: "42"
+  expiry_cron:
+    description: Quartz cron schedule of the expiry (housekeeping) job
+    default: "0 0/15 * * * ?"
+  expiry_timezone:
+    description: Time zone for the expiry job schedule
+    default: UTC
+  request_timeout_days:
+    description: Days after which a PENDING request is closed as TIMED_OUT
+    default: "7"
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production
+    # Production: deploy from CI as the platform service principal, e.g.
+    # run_as: { service_principal_name: <platform-sp-application-id> }
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      demo_mode: "false"

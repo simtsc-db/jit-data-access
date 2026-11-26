@@ -68,6 +68,7 @@ Override with `--var name=value` or `BUNDLE_VAR_<name>`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `name_prefix`, `portal_title` | `jit-access`, `Data Access Portal` | App and job names, portal title |
+| `display_timezone` | empty (viewer's browser zone) | IANA time zone for timestamps in the portal |
 | `catalog`, `control_schema`, `data_schema` | `jit_access`, `control`, `gated_data` | Dedicated catalog and schemas |
 | `catalog_storage_root` | empty | Managed location for the catalog |
 | `warehouse_id` | lookup `Serverless Starter Warehouse` | Warehouse for the app |

@@ -34,6 +34,8 @@ resources:
             value: ${var.demo_mode}
           - name: TBA_PORTAL_TITLE
             value: ${var.portal_title}
+          - name: TBA_DISPLAY_TIMEZONE
+            value: ${var.display_timezone}
           - name: LAKEBASE_ENDPOINT
             value_from: postgres
           - name: TBA_STORE_SCHEMA

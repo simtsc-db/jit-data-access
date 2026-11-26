@@ -24,6 +24,18 @@ const demoApproverCfg = demoApproverConfig(process.env, DEMO_MODE);
 const demoApprover = demoApproverCfg ? new DemoApproverSql(demoApproverCfg) : null;
 const AUTO_DECISION_DELAY_MS = 3000;
 const PORTAL_TITLE = process.env.TBA_PORTAL_TITLE?.trim() || 'Data Access Portal';
+/** IANA time zone for displayed timestamps (e.g. Asia/Singapore); empty or invalid = viewer's browser zone. */
+const DISPLAY_TIME_ZONE = (() => {
+  const tz = process.env.TBA_DISPLAY_TIMEZONE?.trim() ?? '';
+  if (!tz) return '';
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return tz;
+  } catch {
+    console.warn(`Ignoring invalid TBA_DISPLAY_TIMEZONE '${tz}'; using the viewer's browser time zone`);
+    return '';
+  }
+})();
 
 const toRows = (res: unknown): Record<string, unknown>[] => {
   if (res && typeof res === 'object' && 'data' in res && Array.isArray(res.data)) {
@@ -144,6 +156,7 @@ createApp({
           ctl: `${names.catalog}.${names.controlSchema}`,
           demoMode: DEMO_MODE,
           demoApprover: demoApprover !== null,
+          timeZone: DISPLAY_TIME_ZONE,
           title: PORTAL_TITLE,
         }))
       );

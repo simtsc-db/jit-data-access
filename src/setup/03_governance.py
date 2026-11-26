@@ -1,10 +1,10 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 02 -- Governance: control plane, ABAC time-bound guard, grants, DENY
+# MAGIC # 03 -- Governance: catalogue, ABAC time-bound guard, secure views, grants, DENY
 # MAGIC
 # MAGIC | Layer | Object |
 # MAGIC |---|---|
-# MAGIC | Record | `access_lifecycle` (Delta, CDF on, CHECK constraints incl. no self-approval) |
+# MAGIC | Record | `access_lifecycle` in the Lakebase approval store, read via its Unity Catalog catalog (see 02) |
 # MAGIC | Catalogue | `data_products` (owner group, tier, max duration) |
 # MAGIC | Guard | `tba_has_active_access(product)` UDF + ABAC ROW FILTER policy on tagged tables |
 # MAGIC | Grant | group-level `SELECT` on the data schema to the eligible group (group-only grant policy) |
@@ -24,6 +24,8 @@ for k, v in {
     "app_sp_client_id": "",
     "product_tag_key": "jit_access_product",
     "product_tag_value": "citizen_cases",
+    "lakebase_catalog": "jit_access_store",
+    "lakebase_schema": "jit_control",
 }.items():
     dbutils.widgets.text(k, v)
 
@@ -35,6 +37,8 @@ eligible_group = dbutils.widgets.get("eligible_group")
 standing_group = dbutils.widgets.get("standing_access_group")
 owner_group = dbutils.widgets.get("owner_group")
 app_sp = dbutils.widgets.get("app_sp_client_id").strip()
+# Approval store: Lakebase tables, read through the registered (read-only) Unity Catalog catalog.
+store = f"`{dbutils.widgets.get('lakebase_catalog')}`.`{dbutils.widgets.get('lakebase_schema')}`"
 
 PRODUCT_ID = "citizen_cases"
 TAG_KEY = dbutils.widgets.get("product_tag_key")        # governed tag that marks a gated table
@@ -70,65 +74,22 @@ def create_control_tables():
     COMMENT 'Catalogue of time-bound data products and their approval rules'
     """)
     spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {ctl}.access_lifecycle (
-      request_id STRING NOT NULL,
-      principal STRING NOT NULL COMMENT 'User email or service principal application id that gets access',
-      product_id STRING NOT NULL,
-      privilege STRING NOT NULL,
-      justification STRING,
-      duration_minutes INT NOT NULL,
-      status STRING NOT NULL,
-      requested_by STRING NOT NULL,
-      requested_at TIMESTAMP NOT NULL,
-      approver_1 STRING,
-      approver_2 STRING,
-      decided_at TIMESTAMP,
-      decision_reason STRING,
-      starts_at TIMESTAMP,
-      expires_at TIMESTAMP,
-      closed_at TIMESTAMP,
-      closed_by STRING)
-    CLUSTER BY (principal, product_id)
-    COMMENT 'System of record for approval-gated, time-bound access. Read by the ABAC guard at query time.'
-    TBLPROPERTIES (delta.enableChangeDataFeed = true)
-    """)
-    spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {ctl}.expiry_runs (
       run_at TIMESTAMP, expired INT, timed_out INT, still_active INT)
     COMMENT 'One row per expiry job run'
     """)
-    spark.sql(f"""
-    CREATE TABLE IF NOT EXISTS {ctl}.demo_settings (
-      setting STRING NOT NULL, value STRING, updated_by STRING, updated_at TIMESTAMP)
-    COMMENT 'Demo-mode settings for the portal (e.g. auto_approve_pct of the demo auto-approver)'
-    TBLPROPERTIES (delta.enableChangeDataFeed = true)
-    """)
-    spark.sql(f"""
-    MERGE INTO {ctl}.demo_settings t
-    USING (SELECT 'auto_approve_pct' AS setting) s ON t.setting = s.setting
-    WHEN NOT MATCHED THEN INSERT (setting, value, updated_by, updated_at)
-      VALUES ('auto_approve_pct', '100', 'setup', current_timestamp())
-    """)
-    # Added after the first release: who made the latest decision (HUMAN or DEMO_AUTO).
-    cols = {c.name for c in spark.table(f"{ctl}.access_lifecycle").schema.fields}
-    if "decision_source" not in cols:
-        spark.sql(f"ALTER TABLE {ctl}.access_lifecycle ADD COLUMNS "
-                  "(decision_source STRING COMMENT 'HUMAN (portal user) or DEMO_AUTO (demo auto-approver)')")
-
-    existing = {r.key for r in spark.sql(f"SHOW TBLPROPERTIES {ctl}.access_lifecycle").collect()}
-    constraints = {
-        "valid_status": "status IN ('PENDING','PENDING_SECOND','ACTIVE','DENIED','EXPIRED','REVOKED','TIMED_OUT')",
-        "no_self_approval": "coalesce(approver_1,'') NOT IN (principal, requested_by) "
-                            "AND coalesce(approver_2,'') NOT IN (principal, requested_by)",
-        "distinct_approvers": "approver_2 IS NULL OR approver_2 <> approver_1",
-        "active_needs_window": "status <> 'ACTIVE' OR (approver_1 IS NOT NULL AND starts_at IS NOT NULL "
-                               "AND expires_at > starts_at)",
-        "positive_duration": "duration_minutes > 0",
-        "valid_decision_source": "decision_source IS NULL OR decision_source IN ('HUMAN','DEMO_AUTO')",
-    }
-    for name, expr in constraints.items():
-        if f"delta.constraints.{name}" not in existing:
-            spark.sql(f"ALTER TABLE {ctl}.access_lifecycle ADD CONSTRAINT {name} CHECK ({expr})")
+    # Wait until the Lakebase tables from step 02 are visible through the Unity Catalog catalog
+    # (UC caches Lakebase metadata; new objects can take a moment to appear).
+    import time
+    for attempt in range(20):
+        try:
+            spark.sql(f"SELECT 1 FROM {store}.access_lifecycle LIMIT 0").collect()
+            spark.sql(f"SELECT 1 FROM {store}.access_lifecycle_history LIMIT 0").collect()
+            break
+        except Exception as e:
+            if attempt == 19:
+                raise RuntimeError(f"approval store tables not visible in {store}: {str(e)[:200]}")
+            time.sleep(15)
 
     spark.sql(f"""
     MERGE INTO {ctl}.data_products t
@@ -141,7 +102,7 @@ def create_control_tables():
     WHEN NOT MATCHED THEN INSERT *
     """)
 
-step("control tables + constraints", create_control_tables)
+step("catalogue + approval store visible", create_control_tables)
 
 # COMMAND ----------
 # MAGIC %md ## 2. Review views
@@ -154,7 +115,7 @@ def create_views():
     COMMENT 'Access windows open right now (time-evaluated, independent of the expiry job)' AS
     SELECT principal, product_id, privilege, approver_1, approver_2, starts_at, expires_at,
            round((unix_timestamp(expires_at) - unix_timestamp(current_timestamp())) / 3600, 1) AS hours_left
-    FROM {ctl}.access_lifecycle
+    FROM {store}.access_lifecycle
     WHERE status = 'ACTIVE' AND current_timestamp() BETWEEN starts_at AND expires_at
     """)
     spark.sql(f"""
@@ -168,7 +129,7 @@ def create_views():
     SELECT l.*, p.sensitivity_tier, p.owner_group,
            CASE WHEN l.status = 'ACTIVE' AND l.expires_at < current_timestamp()
                 THEN 'EXPIRED (pending job close)' ELSE l.status END AS effective_status
-    FROM {ctl}.access_lifecycle l LEFT JOIN {ctl}.data_products p USING (product_id)
+    FROM {store}.access_lifecycle l LEFT JOIN {ctl}.data_products p USING (product_id)
     """)
     # Caller-filtered secure views for the portal (queried on-behalf-of the signed-in user).
     # Users get SELECT on these views only, never on the base tables; filtering is done by UC.
@@ -181,7 +142,7 @@ def create_views():
            l.closed_at, l.decision_reason, l.decision_source,
            CASE WHEN l.status = 'ACTIVE' AND l.expires_at <= current_timestamp() THEN 'EXPIRED'
                 ELSE l.status END AS effective_status
-    FROM {ctl}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
+    FROM {store}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
     WHERE l.principal = current_user()
     """)
     spark.sql(f"""
@@ -190,7 +151,7 @@ def create_views():
     SELECT l.request_id, l.principal, l.requested_by, l.product_id, p.display_name, p.sensitivity_tier,
            p.owner_group, p.second_approver_required, l.privilege, l.duration_minutes, l.justification,
            l.status, l.approver_1, l.requested_at
-    FROM {ctl}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
+    FROM {store}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
     WHERE l.status IN ('PENDING', 'PENDING_SECOND') AND {owner_pred}
     """)
     spark.sql(f"""
@@ -201,11 +162,25 @@ def create_views():
                 ELSE l.status END AS effective_status,
            l.approver_1, l.approver_2, l.requested_at, l.starts_at, l.expires_at, l.closed_at, l.closed_by,
            l.decision_reason, l.decision_source
-    FROM {ctl}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
+    FROM {store}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
+    WHERE {owner_pred}
+    """)
+
+def create_history_view():
+    owner_pred = "(is_account_group_member(p.owner_group) OR is_member(p.owner_group))"
+    spark.sql(f"""
+    CREATE OR REPLACE VIEW {ctl}.v_owner_access_history
+    COMMENT 'Portal / audit: append-only change history of requests for products the caller owns' AS
+    SELECT h.history_id, h.changed_at, h.change_type, h.request_id, h.status, h.approver_1, h.approver_2,
+           h.decision_source, h.closed_by, h.db_role, l.principal, l.product_id
+    FROM {store}.access_lifecycle_history h
+    JOIN {store}.access_lifecycle l ON l.request_id = h.request_id
+    JOIN {ctl}.data_products p ON p.product_id = l.product_id
     WHERE {owner_pred}
     """)
 
 step("review views", create_views)
+step("history view", create_history_view)
 
 # COMMAND ----------
 # MAGIC %md ## 3. Governed tag + tag the data product
@@ -250,7 +225,7 @@ def guard():
     RETURN is_account_group_member('{standing_group}')
       OR EXISTS (
         SELECT 1
-        FROM {ctl}.access_lifecycle l
+        FROM {store}.access_lifecycle l
         JOIN {ctl}.data_products p ON p.product_id = l.product_id
         WHERE l.product_id = p_product
           AND l.principal = current_user()
@@ -297,12 +272,11 @@ def grants():
         f"GRANT SELECT ON TABLE {ctl}.v_my_access TO `{eligible_group}`",
         f"GRANT SELECT ON TABLE {ctl}.v_review_queue TO `{eligible_group}`",
         f"GRANT SELECT ON TABLE {ctl}.v_owner_access_review TO `{eligible_group}`",
+        f"GRANT SELECT ON TABLE {ctl}.v_owner_access_history TO `{eligible_group}`",
     ]
     if app_sp:
         stmts += [
             f"GRANT USE SCHEMA ON SCHEMA {ctl} TO `{app_sp}`",
-            f"GRANT SELECT, MODIFY ON TABLE {ctl}.access_lifecycle TO `{app_sp}`",
-            f"GRANT SELECT, MODIFY ON TABLE {ctl}.demo_settings TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.data_products TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.v_access_review TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.v_active_access TO `{app_sp}`",

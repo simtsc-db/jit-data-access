@@ -25,6 +25,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import psycopg
 import requests
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
@@ -39,10 +40,14 @@ ap.add_argument("--control-schema", default="control")
 ap.add_argument("--data-schema", default="gated_data")
 ap.add_argument("--window-minutes", type=int, default=3)
 ap.add_argument("--table", default="citizen_cases", help="Gated table name inside the data schema")
+ap.add_argument("--lakebase-project", default="jit-access")
+ap.add_argument("--store-catalog", default="jit_access_store", help="UC catalog of the Lakebase approval store")
+ap.add_argument("--store-schema", default="jit_control")
 ap.add_argument("--no-redact", action="store_true", help="Keep identities and URLs in the evidence file")
 args = ap.parse_args()
 
 CTL = f"{args.catalog}.{args.control_schema}"
+STORE = f"{args.store_catalog}.{args.store_schema}"   # Lakebase approval store, read via Unity Catalog
 TABLE = f"{args.catalog}.{args.data_schema}.{args.table}"
 
 op_ws = WorkspaceClient(profile=args.profile)
@@ -131,8 +136,22 @@ def sql_error(who: Identity, statement: str) -> str | None:
 
 
 def lifecycle(rid: str) -> dict:
-    return op.sql(f"SELECT status, approver_1, starts_at, expires_at, closed_by FROM {CTL}.access_lifecycle "
+    return op.sql(f"SELECT status, approver_1, starts_at, expires_at, closed_by FROM {STORE}.access_lifecycle "
                   f"WHERE request_id = '{rid}'")[0]
+
+
+def pg_exec(statement: str, params: tuple = ()) -> str | None:
+    """Runs a statement directly in the Lakebase store as the operator (project owner). Returns the error, if any."""
+    branch = f"projects/{args.lakebase_project}/branches/production"
+    ep = next(iter(op_ws.postgres.list_endpoints(parent=branch)))
+    token = op_ws.postgres.generate_database_credential(endpoint=ep.name).token
+    try:
+        with psycopg.connect(host=ep.status.hosts.host, dbname="databricks_postgres", user=OPERATOR,
+                             password=token, sslmode="require", autocommit=True) as conn:
+            conn.execute(statement, params)
+        return None
+    except psycopg.Error as e:
+        return str(e).splitlines()[0][:170]
 
 
 def req(who: Identity, minutes: int, why: str) -> tuple[int, dict]:
@@ -141,13 +160,13 @@ def req(who: Identity, minutes: int, why: str) -> tuple[int, dict]:
 
 
 note(f"portal = {APP_URL}; operator = `{OPERATOR}`, analyst = `{ANALYST}` (identities as seen by the app, OBO)")
-op.sql(f"UPDATE {CTL}.access_lifecycle SET status = 'REVOKED', closed_by = 'scenario-reset', "
-       f"closed_at = current_timestamp() WHERE principal IN ('{ANALYST}', '{OPERATOR}') "
-       "AND status IN ('PENDING','PENDING_SECOND','ACTIVE')")
+pg_exec(f"UPDATE {args.store_schema}.access_lifecycle SET status = 'REVOKED', closed_by = 'scenario-reset', "
+        "closed_at = now() WHERE principal IN (%s, %s) AND status IN ('PENDING','PENDING_SECOND','ACTIVE')",
+        (ANALYST, OPERATOR))
 
 # --- Unity Catalog layer (direct warehouse, app bypassed) --------------------------------------------
 check("no access before approval (via app)", visible(an) == 0, f"analyst sees {visible(an)} rows")
-err = sql_error(an, f"INSERT INTO {CTL}.access_lifecycle (request_id, principal, product_id, privilege, "
+err = sql_error(an, f"INSERT INTO {STORE}.access_lifecycle (request_id, principal, product_id, privilege, "
                     "duration_minutes, status, requested_by, requested_at, approver_1, starts_at, expires_at) "
                     "VALUES ('forged', current_user(), 'citizen_cases', 'SELECT', 60, 'ACTIVE', 'x', now(), "
                     "'someone', now(), now() + INTERVAL 1 HOUR)")
@@ -168,9 +187,9 @@ code, body = req(op, 60, "Scenario test: self-approval attempt")
 rid_self = body.get("requestId", "")
 code2, body2 = op.post(f"/api/portal/requests/{rid_self}/approve")
 check("self-approval rejected (app)", code2 == 403, f"HTTP {code2}: {body2.get('error')}")
-err = sql_error(op, f"UPDATE {CTL}.access_lifecycle SET status='ACTIVE', approver_1=principal, starts_at=now(), "
-                    f"expires_at=now() + INTERVAL 1 HOUR WHERE request_id = '{rid_self}'")
-check("self-approval rejected (Delta CHECK constraint)", err is not None, err or "update succeeded (BAD)")
+err = pg_exec(f"UPDATE {args.store_schema}.access_lifecycle SET status='ACTIVE', approver_1=principal, "
+              "starts_at=now(), expires_at=now() + interval '1 hour' WHERE request_id = %s", (rid_self,))
+check("self-approval rejected (Postgres CHECK constraint)", err is not None, err or "update succeeded (BAD)")
 op.post(f"/api/portal/requests/{rid_self}/decline", {"reason": "test cleanup"})
 
 code, body = req(an, 8 * 1440, "Scenario test: window above tier max")
@@ -226,11 +245,10 @@ row = lifecycle(rid)
 check("expiry job closes the record", row["status"] == "EXPIRED",
       f"job run {run.run_id} {run.state.result_state.value}; status `{row['status']}` by `{row['closed_by']}`")
 
-hist = op.sql(f"SELECT _change_type, status, approver_1, closed_by, _commit_timestamp FROM "
-              f"table_changes('{CTL}.access_lifecycle', 0) WHERE request_id = '{rid}' "
-              "ORDER BY _commit_version, _change_type")
-trail = [h for h in hist if h["_change_type"] in ("insert", "update_postimage")]
-check("change data feed has the full lifecycle", [h["status"] for h in trail] == ["PENDING", "ACTIVE", "EXPIRED"],
+hist = op.sql(f"SELECT change_type AS _change_type, status, approver_1, closed_by, changed_at AS _commit_timestamp "
+              f"FROM {CTL}.v_owner_access_history WHERE request_id = '{rid}' ORDER BY history_id")
+trail = hist
+check("history trail has the full lifecycle", [h["status"] for h in trail] == ["PENDING", "ACTIVE", "EXPIRED"],
       " -> ".join(h["status"] for h in trail))
 
 passed = sum(ok for _, ok, _ in checks)
@@ -267,7 +285,7 @@ out.write_text(redact("\n".join([
     "## Timeline",
     *log,
     "",
-    "## Lifecycle record (change data feed)",
+    "## Lifecycle record (append-only history trigger)",
     "| change | status | approver_1 | closed_by | commit |",
     "|---|---|---|---|---|",
     *[f"| {h['_change_type']} | {h['status']} | {h['approver_1']} | {h['closed_by']} | {h['_commit_timestamp']} |"

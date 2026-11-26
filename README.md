@@ -2,8 +2,9 @@
 
 Access to a sensitive data product is **granted only after approval** and **ends automatically at a set time**.
 Unity Catalog enforces it at query time. Unity Catalog has no native time-to-live on grants, so this repo shows
-a thin, build-on-top pattern: a standing group grant, an approval record in Unity Catalog, and an ABAC row
-filter policy that checks the record against the current time on every query.
+a thin, build-on-top pattern: a standing group grant, an approval record in a **Lakebase Postgres** approval
+store (registered in Unity Catalog, so no sync), and an ABAC row filter policy that checks the record against the
+current time on every query.
 
 Everything is synthetic and everything workspace-specific is a bundle variable (see [Configuration](#configuration)).
 
@@ -13,9 +14,9 @@ Everything is synthetic and everything workspace-specific is a bundle variable (
 |---|---|---|
 | Access still open after the approved end date | Until someone remembers to revoke | **0 s**: the guard stops returning rows at `expires_at` (evidence check 15) |
 | Approvals that bypass the data owner | Possible (owners or admins grant directly) | Blocked: DENY `MANAGE ACCESS CONTROL` (Beta, check 4) |
-| Self-approval | Policy only | Blocked in app logic **and** a Delta CHECK constraint (checks 5 and 6) |
+| Self-approval | Policy only | Blocked in app logic **and** a Postgres CHECK constraint (checks 5 and 6) |
 | Who can approve | Whoever can run GRANT | Only owner-group members, checked as the signed-in user (check 8) |
-| Audit evidence for access reviews | Spread across tickets and grants | One Delta table with change data feed (check 17) |
+| Audit evidence for access reviews | Spread across tickets and grants | Append-only history table written by a trigger (check 17) |
 
 ## How it works
 
@@ -24,10 +25,11 @@ User opens the access portal (Databricks App): directly, from the table comment,
    UC "Request access" (redirect URL destination; shown to principals that lack SELECT)
    -> owner-group member approves (no self-approval, optional two-person rule, tier max duration)
    -> portal server: identity + owner check run AS THE USER (OBO); the write runs as the app SP
-      (users have no MODIFY on control.access_lifecycle)
+      in Lakebase Postgres (users have no Postgres role and no grant on the approval store)
    -> portal reads (*.obo.sql) hit caller-filtered secure views: own requests, owner-only queue and audit
    -> ABAC ROW FILTER policy on tables tagged <product_tag_key>=<id> calls
-      control.tba_has_active_access(<id>): TRUE only while now() is inside an approved window
+      control.tba_has_active_access(<id>), which reads the Lakebase store through its UC catalog:
+      TRUE only while now() is inside an approved window (definer's rights, caller's identity)
    -> expiry job (every 15 min by default) closes records ACTIVE -> EXPIRED; enforcement does not depend on it
 ```
 
@@ -36,7 +38,7 @@ User opens the access portal (Databricks App): directly, from the table comment,
 | Isolated catalog | `jit_access` (users get only USE CATALOG) |
 | Data product (synthetic) | `jit_access.gated_data.citizen_cases`, 5,000 rows, tagged `jit_access_product=citizen_cases` |
 | Standing grant | `account users`: USE SCHEMA + SELECT on `gated_data` (group-level only, no per-user grants) |
-| System of record | `jit_access.control.access_lifecycle` (CDF on, 5 CHECK constraints) + `data_products` |
+| System of record | Lakebase project `jit-access`, schema `jit_control`: `access_lifecycle` (7 CHECK constraints, partial unique index), append-only `access_lifecycle_history` (trigger), `demo_settings`; registered in UC as `jit_access_store` (read-only). Catalogue `jit_access.control.data_products` stays in Delta |
 | Guard | UDF `control.tba_has_active_access` + ABAC policy `tba_guard_citizen_cases` |
 | Bypass prevention | ABAC DENY policy `tba_deny_manage_access_data` (Beta, optional) |
 | Review views | `v_active_access`, `v_expiring_soon`, `v_access_review` (platform); secure views for the portal: `v_my_access` (current_user()), `v_review_queue` and `v_owner_access_review` (owner group only) |
@@ -93,6 +95,8 @@ databricks bundle deploy -p <profile> --var catalog=my_jit_catalog --var owner_g
 | `synthetic_rows` / `synthetic_seed` | `5000` / `42` | Synthetic data volume and seed |
 | `expiry_cron` / `expiry_timezone` | every 15 min / `UTC` | Schedule of the housekeeping job |
 | `request_timeout_days` | `7` | PENDING requests older than this become TIMED_OUT |
+| `lakebase_project` / `lakebase_catalog` / `lakebase_schema` | `jit-access` / `jit_access_store` / `jit_control` | Approval store project, its UC catalog, Postgres schema |
+| `lakebase_min_cu` / `lakebase_max_cu` / `lakebase_suspend_timeout` | `0.5` / `1` / `3600s` | Lakebase compute size and scale-to-zero delay |
 | `demo_approver_scope` / `..._client_id_key` / `..._secret_key` | `jit-access-demo` / `client-id` / `client-secret` | Secret scope and keys of the demo auto-approver (`demo` target only) |
 
 ### Targets
@@ -121,26 +125,40 @@ Full presenter runbook (cast, pre-flight, talk track, reset, troubleshooting): [
 - `src/portal/server/lifecycle.test.ts`: 7/7 unit tests of the rules, including a full two-person approval.
 - [`evidence/setup.md`](evidence/setup.md): policies, grants, constraints, RFA destination, expiry runs, app status.
 - [`evidence/demo-auto-approver.md`](evidence/demo-auto-approver.md): the demo auto-approver at 100% and 0%, through the deployed portal.
-- [`evidence/lakebase-rowfilter-test.md`](evidence/lakebase-rowfilter-test.md): can the guard read approvals
-  stored in Lakebase Postgres? (see below)
+- [`evidence/lakebase-approval-store.md`](evidence/lakebase-approval-store.md): the deployed Lakebase store end to end
+  (auto-approver at 100% and 0%, expiry, history trail, Postgres constraints and app-role privileges).
+- [`evidence/lakebase-identity-probe.md`](evidence/lakebase-identity-probe.md): users need **no** access to the
+  approval store; the guard reads it with the owner's rights.
+- [`evidence/lakebase-rowfilter-test.md`](evidence/lakebase-rowfilter-test.md): first feasibility test (row filter,
+  ABAC policy, no sync lag, fails closed).
 
-## Option: approval records in Lakebase
+## Why Lakebase for the approval store
 
-The approval record can live in **Lakebase Postgres** instead of a Delta table, with no sync step. Register the
-Lakebase database in Unity Catalog (read-only Lakebase catalog) and let the guard UDF query it directly.
-Tested on serverless SQL ([evidence](evidence/lakebase-rowfilter-test.md)):
+The approval record is operational data: small, written row by row, read on every gated query. Lakebase
+Postgres fits that, and registering it in Unity Catalog lets the guard read it **directly, with no sync**:
 
-- A UC SQL UDF can read the Lakebase catalog, and works as both a table row filter and an ABAC policy.
-- A change in Postgres (expire, extend) takes effect on the very next query: no sync lag.
-- If Lakebase is unreachable, the protected query **fails** (`FAILED_JDBC.CONNECTION`), so it fails closed.
-
-Trade-offs: reads of gated tables now depend on Lakebase availability; registered Lakebase catalogs require
-serverless compute (classic clusters fail closed); Postgres roles, not UC grants, control who can write
-approvals, so lock them down; and whether end users need SELECT on the Lakebase catalog (definer vs invoker
-rights) is not yet tested. The Delta table remains the default here.
+- **Exact and immediate:** an approval, extension or revoke written in Postgres applies on the next query.
+- **Integrity in the database:** CHECK constraints (no self-approval, valid states, ACTIVE needs a window) and a
+  partial unique index (one pending request per user and product) hold for every writer, not just the app.
+- **Tamper-evident audit:** a `SECURITY DEFINER` trigger writes every insert, update and delete to
+  `access_lifecycle_history`, with the Postgres role that made the change. The app role cannot read or write it.
+- **Least privilege:** the app's Postgres role has SELECT, INSERT, UPDATE on two tables and nothing else (no
+  DELETE). End users have no Postgres role and no grant on the store catalog; the guard and secure views read
+  it with their owner's rights while `current_user()` stays the caller ([probe](evidence/lakebase-identity-probe.md)).
+- **Fails closed:** if Lakebase is unreachable, gated queries error instead of returning data.
 
 ## Known limitations and deviations
 
+- **Lakebase resources in bundles are Beta** (`postgres_projects`, `postgres_catalogs`). Gated queries depend on
+  the Lakebase endpoint being available, and Lakebase catalogs need **serverless** compute (classic clusters fail
+  closed). After scale-to-zero, the first gated query pays a cold start; `lakebase_suspend_timeout` controls it.
+- **Jobs write to Postgres as their run-as identity.** In dev that is the deployer (project owner). For production,
+  run the jobs as a platform service principal and give it a Postgres role with DML on the approval tables.
+- **No Lakebase?** The Delta-based version (approval record in a Delta table with CDF, no Lakebase dependency)
+  is kept as git tag [`v1-delta`](../../tree/v1-delta).
+- **Upgrading from the Delta-based version** (before this change): the old `control.access_lifecycle` and
+  `control.demo_settings` Delta tables are no longer used and are not migrated. Drop them once you no longer need
+  their history.
 - **No native TTL in Unity Catalog.** This is a build-on-top pattern. Access is gated at the **row** level: the
   standing SELECT grant stays in place, and outside a window queries return 0 rows rather than `PERMISSION_DENIED`.
   Table metadata stays visible (BROWSE-like). Where a privilege-level revoke is mandated, use time-bound group

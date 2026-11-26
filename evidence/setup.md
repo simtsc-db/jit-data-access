@@ -1,6 +1,7 @@
 # Setup evidence (<profile>, 2026-11-25 07:21 UTC)
 
-> Captured in November 2026 on an earlier deployment of this repo. Object names were rewritten to the
+> Captured in November 2026 on an earlier, **Delta-based** version of this repo (approval record in a Delta
+> table with CDF; now in Lakebase, see `lakebase-approval-store.md`). Object names were rewritten to the
 > current defaults (`jit_access`, `jit-access-*`), and identities, URLs and the CLI profile are redacted.
 
 ## Bundle resources

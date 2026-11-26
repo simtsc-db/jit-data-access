@@ -1,0 +1,22 @@
+# Approval store: Lakebase Postgres (system of record for requests, approvals and demo settings),
+# registered in Unity Catalog as a read-only catalog so the ABAC guard and secure views can read it
+# directly, with no sync. Writes come only from the portal (app service principal) and the expiry job.
+resources:
+  postgres_projects:
+    approval_store:
+      project_id: ${var.lakebase_project}
+      display_name: JIT access approval store
+      pg_version: 17
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: ${var.lakebase_min_cu}
+        autoscaling_limit_max_cu: ${var.lakebase_max_cu}
+        suspend_timeout_duration: ${var.lakebase_suspend_timeout}
+
+  postgres_catalogs:
+    approval_store_catalog:
+      catalog_id: ${var.lakebase_catalog}
+      branch: projects/${resources.postgres_projects.approval_store.project_id}/branches/production
+      postgres_database: databricks_postgres
+
+  # The app's postgres resource (CAN_CONNECT_AND_CREATE) creates the app service principal's Postgres role;
+  # setup (02_approval_store) then grants it DML on the approval tables only.

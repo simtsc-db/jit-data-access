@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decide, demoApproverConfig } from './demoApprover';
-import { approve, decline, type RunSql } from './lifecycle';
+import { approve, decline, type RunSql, type Stores } from './lifecycle';
 
 describe('decide', () => {
   it('always approves at 100%, whatever the draw', () => {
@@ -51,9 +51,10 @@ function recorder(request: Record<string, unknown>) {
     }
     if (statement.startsWith('SELECT *')) return Promise.resolve([request]);
     writes.push({ statement, params: params ?? {} });
-    return Promise.resolve([{ num_affected_rows: 1 }]);
+    return Promise.resolve([{ request_id: 'r1' }]); // RETURNING request_id
   };
-  return { run, writes };
+  const db: Stores = { uc: run, store: run };
+  return { run: db, writes };
 }
 
 const pending = { request_id: 'r1', principal: 'alice', requested_by: 'alice', product_id: 'p', status: 'PENDING' };

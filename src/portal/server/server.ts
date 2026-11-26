@@ -1,4 +1,4 @@
-import { createApp, analytics, server, sql } from '@databricks/appkit';
+import { createApp, analytics, lakebase, server, sql } from '@databricks/appkit';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -12,7 +12,9 @@ import {
   requestAccess,
   setAutoApprovePct,
   str,
+  toPositional,
   type RunSql,
+  type Stores,
 } from './lifecycle';
 import { DemoApproverSql, decide, demoApproverConfig } from './demoApprover';
 
@@ -39,13 +41,22 @@ const declineBody = z.object({ reason: z.string().min(1).max(1000) });
 const demoSettingsBody = z.object({ pct: z.number().int().min(0).max(100) });
 
 createApp({
-  plugins: [analytics(), server()],
+  plugins: [analytics(), server(), lakebase()],
   // Access state changes by the second (approvals, expiry). Never serve it from a cache:
   // AppKit's default would cache analytics results for 1 hour.
   cache: { enabled: false },
   onPluginsReady(appkit) {
     // Writes to the control plane run as the app service principal (users never get MODIFY).
     const appRun: RunSql = async (statement, params) => toRows(await appkit.analytics.query(statement, params));
+    // Requests and settings live in Lakebase Postgres (app SP role, DML on two tables only).
+    const storeRun: RunSql = async (statement, params) => {
+      const { text, values } = toPositional(statement, params);
+      const res = await appkit.lakebase.query<Record<string, unknown>>(text, values);
+      return res.rows.map((row) =>
+        Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Date ? v.toISOString() : v]))
+      );
+    };
+    const db: Stores = { uc: appRun, store: storeRun };
 
     // Identity and approver checks run as the signed-in user, so they cannot be spoofed via headers.
     const whoAmI = async (req: Request) =>
@@ -60,7 +71,7 @@ createApp({
     };
 
     const ownsAnyProduct = async (req: Request) => {
-      for (const g of await ownerGroups(appRun)) if (await isMemberOf(req, g)) return true;
+      for (const g of await ownerGroups(db)) if (await isMemberOf(req, g)) return true;
       return false;
     };
 
@@ -80,12 +91,12 @@ createApp({
     };
     const autoDecide = async (requestId: string) => {
       try {
-        const { pct } = await getAutoApprovePct(appRun);
+        const { pct } = await getAutoApprovePct(db);
         const decision = decide(pct, Math.random());
         const approver = await approverWhoAmI();
-        const owner = await approverIsOwner(await ownerGroupFor(appRun, requestId));
+        const owner = await approverIsOwner(await ownerGroupFor(db, requestId));
         if (decision.approve) {
-          const status = await approve(appRun, {
+          const status = await approve(db, {
             requestId,
             approver,
             approverIsOwner: owner,
@@ -94,7 +105,7 @@ createApp({
           });
           lastAutoDecision = { requestId, outcome: status, at: new Date().toISOString() };
         } else {
-          await decline(appRun, {
+          await decline(db, {
             requestId,
             approver,
             approverIsOwner: owner,
@@ -146,7 +157,7 @@ createApp({
           if (!DEMO_MODE && body.data.durationMinutes % 1440 !== 0) {
             throw new AccessError('Durations are whole days outside demo mode');
           }
-          const requestId = await requestAccess(appRun, {
+          const requestId = await requestAccess(db, {
             principal: me,
             requestedBy: me,
             productId: body.data.productId,
@@ -164,7 +175,7 @@ createApp({
         '/api/portal/demo/approver',
         handle(async (req) => {
           if (!demoApprover) return { enabled: false };
-          const settings = await getAutoApprovePct(appRun);
+          const settings = await getAutoApprovePct(db);
           const identity = await approverWhoAmI().catch((e: unknown) => {
             lastAutoError = e instanceof Error ? e.message.split('\n')[0].slice(0, 300) : String(e);
             return null;
@@ -188,8 +199,8 @@ createApp({
           const body = demoSettingsBody.safeParse(req.body);
           if (!body.success) throw new AccessError('Approval rate must be a whole number from 0 to 100');
           if (!(await ownsAnyProduct(req))) throw new AccessError('Only data owners can change the demo approver', 403);
-          await setAutoApprovePct(appRun, body.data.pct, await whoAmI(req));
-          return getAutoApprovePct(appRun);
+          await setAutoApprovePct(db, body.data.pct, await whoAmI(req));
+          return getAutoApprovePct(db);
         })
       );
 
@@ -198,8 +209,8 @@ createApp({
         handle(async (req) => {
           const requestId = String(req.params.id);
           const me = await whoAmI(req);
-          const owner = await isMemberOf(req, await ownerGroupFor(appRun, requestId));
-          const status = await approve(appRun, { requestId, approver: me, approverIsOwner: owner });
+          const owner = await isMemberOf(req, await ownerGroupFor(db, requestId));
+          const status = await approve(db, { requestId, approver: me, approverIsOwner: owner });
           return { requestId, status };
         })
       );
@@ -211,8 +222,8 @@ createApp({
           if (!body.success) throw new AccessError('A reason is required');
           const requestId = String(req.params.id);
           const me = await whoAmI(req);
-          const owner = await isMemberOf(req, await ownerGroupFor(appRun, requestId));
-          await decline(appRun, { requestId, approver: me, approverIsOwner: owner, reason: body.data.reason });
+          const owner = await isMemberOf(req, await ownerGroupFor(db, requestId));
+          await decline(db, { requestId, approver: me, approverIsOwner: owner, reason: body.data.reason });
           return { requestId, status: 'DENIED' };
         })
       );

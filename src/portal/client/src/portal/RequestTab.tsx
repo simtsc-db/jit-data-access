@@ -26,11 +26,12 @@ import { EmptyNote, ErrorNote, LoadingRows } from './common';
 interface Props {
   ctl: string;
   demoMode: boolean;
+  demoApprover: boolean;
   preselectSecurable: string | null;
   onSubmitted: () => void;
 }
 
-export function RequestTab({ ctl, demoMode, preselectSecurable, onSubmitted }: Props) {
+export function RequestTab({ ctl, demoMode, demoApprover, preselectSecurable, onSubmitted }: Props) {
   const params = useMemo(() => ({ ctl: sql.string(ctl) }), [ctl]);
   const { data, loading, error } = useAnalyticsQuery('products', params);
 
@@ -70,7 +71,8 @@ export function RequestTab({ ctl, demoMode, preselectSecurable, onSubmitted }: P
         durationMinutes: minutes,
         justification,
       });
-      setResult({ ok: true, message: `Request ${String(res.requestId)} sent to ${product.owner_group}.` });
+      const auto = typeof res.autoDecisionInMs === 'number' ? ' The demo auto-approver decides in a few seconds.' : '';
+      setResult({ ok: true, message: `Request ${String(res.requestId)} sent to ${product.owner_group}.${auto}` });
       setJustification('');
       onSubmitted();
     } catch (e) {
@@ -158,6 +160,12 @@ export function RequestTab({ ctl, demoMode, preselectSecurable, onSubmitted }: P
               {result.ok && <CheckCircle2 className="h-4 w-4 text-success" />}
               <AlertDescription>{result.message}</AlertDescription>
             </Alert>
+          )}
+          {demoApprover && (
+            <p className="text-sm text-muted-foreground">
+              Demo mode: an automated approver (a separate service principal) decides new requests a few seconds after
+              submission, at the rate set in the Review queue tab.
+            </p>
           )}
           <Button onClick={() => void submit()} disabled={submitting || !durationValid || !justificationValid}>
             {submitting ? 'Submitting...' : 'Submit request'}

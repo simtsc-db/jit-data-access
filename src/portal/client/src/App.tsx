@@ -68,10 +68,13 @@ export default function App() {
               <RequestTab
                 ctl={config.ctl}
                 demoMode={config.demoMode}
+                demoApprover={config.demoApprover}
                 preselectSecurable={preselect}
                 onSubmitted={() => {
                   refresh();
                   setTab('mine');
+                  // The demo approver decides about 3 s after submit; refresh once it has.
+                  if (config.demoApprover) window.setTimeout(refresh, 5000);
                 }}
               />
             </TabsContent>
@@ -79,7 +82,12 @@ export default function App() {
               <MyAccessTab key={`mine-${refreshKey}`} ctl={config.ctl} onRefresh={refresh} />
             </TabsContent>
             <TabsContent value="review">
-              <ReviewTab key={`review-${refreshKey}`} ctl={config.ctl} onChanged={refresh} />
+              <ReviewTab
+                key={`review-${refreshKey}`}
+                ctl={config.ctl}
+                demoApprover={config.demoApprover}
+                onChanged={refresh}
+              />
             </TabsContent>
             <TabsContent value="audit">
               <AuditTab key={`audit-${refreshKey}`} ctl={config.ctl} />

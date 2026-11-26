@@ -97,6 +97,24 @@ def create_control_tables():
       run_at TIMESTAMP, expired INT, timed_out INT, still_active INT)
     COMMENT 'One row per expiry job run'
     """)
+    spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {ctl}.demo_settings (
+      setting STRING NOT NULL, value STRING, updated_by STRING, updated_at TIMESTAMP)
+    COMMENT 'Demo-mode settings for the portal (e.g. auto_approve_pct of the demo auto-approver)'
+    TBLPROPERTIES (delta.enableChangeDataFeed = true)
+    """)
+    spark.sql(f"""
+    MERGE INTO {ctl}.demo_settings t
+    USING (SELECT 'auto_approve_pct' AS setting) s ON t.setting = s.setting
+    WHEN NOT MATCHED THEN INSERT (setting, value, updated_by, updated_at)
+      VALUES ('auto_approve_pct', '100', 'setup', current_timestamp())
+    """)
+    # Added after the first release: who made the latest decision (HUMAN or DEMO_AUTO).
+    cols = {c.name for c in spark.table(f"{ctl}.access_lifecycle").schema.fields}
+    if "decision_source" not in cols:
+        spark.sql(f"ALTER TABLE {ctl}.access_lifecycle ADD COLUMNS "
+                  "(decision_source STRING COMMENT 'HUMAN (portal user) or DEMO_AUTO (demo auto-approver)')")
+
     existing = {r.key for r in spark.sql(f"SHOW TBLPROPERTIES {ctl}.access_lifecycle").collect()}
     constraints = {
         "valid_status": "status IN ('PENDING','PENDING_SECOND','ACTIVE','DENIED','EXPIRED','REVOKED','TIMED_OUT')",
@@ -106,6 +124,7 @@ def create_control_tables():
         "active_needs_window": "status <> 'ACTIVE' OR (approver_1 IS NOT NULL AND starts_at IS NOT NULL "
                                "AND expires_at > starts_at)",
         "positive_duration": "duration_minutes > 0",
+        "valid_decision_source": "decision_source IS NULL OR decision_source IN ('HUMAN','DEMO_AUTO')",
     }
     for name, expr in constraints.items():
         if f"delta.constraints.{name}" not in existing:
@@ -159,7 +178,7 @@ def create_views():
     COMMENT 'Portal: the caller''s own requests and windows (filtered by current_user())' AS
     SELECT l.request_id, l.product_id, p.display_name, p.sensitivity_tier, l.privilege, l.duration_minutes,
            l.justification, l.requested_at, l.approver_1, l.approver_2, l.starts_at, l.expires_at,
-           l.closed_at, l.decision_reason,
+           l.closed_at, l.decision_reason, l.decision_source,
            CASE WHEN l.status = 'ACTIVE' AND l.expires_at <= current_timestamp() THEN 'EXPIRED'
                 ELSE l.status END AS effective_status
     FROM {ctl}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
@@ -181,7 +200,7 @@ def create_views():
            CASE WHEN l.status = 'ACTIVE' AND l.expires_at <= current_timestamp() THEN 'EXPIRED (pending job close)'
                 ELSE l.status END AS effective_status,
            l.approver_1, l.approver_2, l.requested_at, l.starts_at, l.expires_at, l.closed_at, l.closed_by,
-           l.decision_reason
+           l.decision_reason, l.decision_source
     FROM {ctl}.access_lifecycle l JOIN {ctl}.data_products p USING (product_id)
     WHERE {owner_pred}
     """)
@@ -283,6 +302,7 @@ def grants():
         stmts += [
             f"GRANT USE SCHEMA ON SCHEMA {ctl} TO `{app_sp}`",
             f"GRANT SELECT, MODIFY ON TABLE {ctl}.access_lifecycle TO `{app_sp}`",
+            f"GRANT SELECT, MODIFY ON TABLE {ctl}.demo_settings TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.data_products TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.v_access_review TO `{app_sp}`",
             f"GRANT SELECT ON TABLE {ctl}.v_active_access TO `{app_sp}`",

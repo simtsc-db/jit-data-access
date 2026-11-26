@@ -93,6 +93,15 @@ databricks bundle deploy -p <profile> --var catalog=my_jit_catalog --var owner_g
 | `synthetic_rows` / `synthetic_seed` | `5000` / `42` | Synthetic data volume and seed |
 | `expiry_cron` / `expiry_timezone` | every 15 min / `UTC` | Schedule of the housekeeping job |
 | `request_timeout_days` | `7` | PENDING requests older than this become TIMED_OUT |
+| `demo_approver_scope` / `..._client_id_key` / `..._secret_key` | `jit-access-demo` / `client-id` / `client-secret` | Secret scope and keys of the demo auto-approver (`demo` target only) |
+
+### Targets
+
+| Target | Use |
+|---|---|
+| `dev` (default) | Development deploy; two human identities needed to demo approval |
+| `demo` | Like `dev`, plus the **demo auto-approver**: a separate service principal that decides new requests at a rate set with a slider in the portal (100% always approves, 0% always declines), so one presenter can run the flow. Owner group `jit-access-owners`. Setup: [RUNBOOK.md](RUNBOOK.md#solo-presenter-demo-auto-approver) |
+| `prod` | Production mode; `demo_mode=false`, no auto-approver |
 
 ## Demo script (about 5 min)
 
@@ -111,6 +120,7 @@ Full presenter runbook (cast, pre-flight, talk track, reset, troubleshooting): [
   checks of the UC layer. The scenario test redacts identities and URLs in this file by default.
 - `src/portal/server/lifecycle.test.ts`: 7/7 unit tests of the rules, including a full two-person approval.
 - [`evidence/setup.md`](evidence/setup.md): policies, grants, constraints, RFA destination, expiry runs, app status.
+- [`evidence/demo-auto-approver.md`](evidence/demo-auto-approver.md): the demo auto-approver at 100% and 0%, through the deployed portal.
 - [`evidence/lakebase-rowfilter-test.md`](evidence/lakebase-rowfilter-test.md): can the guard read approvals
   stored in Lakebase Postgres? (see below)
 

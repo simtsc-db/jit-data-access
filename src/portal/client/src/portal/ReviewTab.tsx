@@ -16,13 +16,24 @@ import {
 import { sql } from '@databricks/appkit-ui/js';
 import { formatDuration, formatTs, postJson } from '../lib/portal';
 import { EmptyNote, ErrorNote, LoadingRows, StatusBadge } from './common';
+import { DemoApproverCard } from './DemoApproverCard';
 
 interface Props {
   ctl: string;
+  demoApprover: boolean;
   onChanged: () => void;
 }
 
-export function ReviewTab({ ctl, onChanged }: Props) {
+export function ReviewTab({ ctl, demoApprover, onChanged }: Props) {
+  return (
+    <div className="space-y-4">
+      {demoApprover && <DemoApproverCard />}
+      <ReviewQueue ctl={ctl} onChanged={onChanged} />
+    </div>
+  );
+}
+
+function ReviewQueue({ ctl, onChanged }: Omit<Props, 'demoApprover'>) {
   const params = useMemo(() => ({ ctl: sql.string(ctl) }), [ctl]);
   const { data, loading, error } = useAnalyticsQuery('review_queue', params);
 

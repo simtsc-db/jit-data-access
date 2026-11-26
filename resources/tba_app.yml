@@ -1,0 +1,30 @@
+resources:
+  apps:
+    access_portal:
+      name: ${var.name_prefix}-portal
+      description: Access portal -- request, approve and track time-bound data access
+      source_code_path: ../src/portal
+      # On-behalf-of-user auth (scope `sql`): portal reads (*.obo.sql) and identity / approver checks
+      # run as the signed-in user, so Unity Catalog and the ABAC guard evaluate the real user.
+      user_api_scopes:
+        - sql
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      config:
+        command: ["npm", "run", "start"]
+        env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: TBA_CATALOG
+            value: ${var.catalog}
+          - name: TBA_CONTROL_SCHEMA
+            value: ${var.control_schema}
+          - name: TBA_DATA_SCHEMA
+            value: ${var.data_schema}
+          - name: TBA_DEMO_MODE
+            value: ${var.demo_mode}
+          - name: TBA_PORTAL_TITLE
+            value: ${var.portal_title}

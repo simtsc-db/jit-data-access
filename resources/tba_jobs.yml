@@ -1,0 +1,74 @@
+resources:
+  jobs:
+    tba_setup:
+      name: ${var.name_prefix}-setup
+      description: >
+        Idempotent setup: synthetic sensitive data product, control tables, governed tag,
+        ABAC time-bound guard (row filter policy), group-level grants, DENY policy (Beta).
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: catalog_storage_root
+          default: ${var.catalog_storage_root}
+        - name: control_schema
+          default: ${var.control_schema}
+        - name: data_schema
+          default: ${var.data_schema}
+        - name: eligible_group
+          default: ${var.eligible_group}
+        - name: standing_access_group
+          default: ${var.standing_access_group}
+        - name: owner_group
+          default: ${var.owner_group}
+        - name: app_sp_client_id
+          default: ${resources.apps.access_portal.service_principal_client_id}
+        - name: product_tag_key
+          default: ${var.product_tag_key}
+        - name: product_tag_value
+          default: ${var.product_tag_value}
+        - name: seed
+          default: ${var.synthetic_seed}
+        - name: rows
+          default: ${var.synthetic_rows}
+      tasks:
+        - task_key: generate_data
+          notebook_task:
+            notebook_path: ../src/setup/01_generate_data.py
+          environment_key: default
+        - task_key: governance
+          depends_on:
+            - task_key: generate_data
+          notebook_task:
+            notebook_path: ../src/setup/02_governance.py
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+
+    tba_expiry:
+      name: ${var.name_prefix}-expiry
+      description: >
+        Closes expired grants (ACTIVE -> EXPIRED), times out stale requests and logs each run.
+        Enforcement does not depend on this job: the ABAC guard stops access at expires_at.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: ${var.expiry_cron}
+        timezone_id: ${var.expiry_timezone}
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: control_schema
+          default: ${var.control_schema}
+        - name: request_timeout_days
+          default: ${var.request_timeout_days}
+      tasks:
+        - task_key: expire_access
+          notebook_task:
+            notebook_path: ../src/jobs/expire_access.py
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
